@@ -1166,7 +1166,7 @@ tab
 dim(tab)
 round(tab[,1:6],digits=2)
 
-colnames(tab) <- c("Moist_q2.5","Moist_q50","Moist_q97.5",
+colnames(tab) <- c("Moisture_q2.5","Moisture_q50","Moisture_q97.5",
                    "Nitrogen_q2.5","Nitrogen_q50","Nitrogen_q97.5",
 
                    "NiN")
@@ -1177,8 +1177,8 @@ tab
 
 # restructuring into separate indicators for lower (q2.5) and higher (q97.5) than reference value (=median, q50)
 y.Moist <- numeric(length=nrow(tab)*2)
-y.Moist[((1:dim(tab)[1])*2)-1] <- tab$Moist_q2.5 
-y.Moist[((1:dim(tab)[1])*2)] <- tab$Moist_q97.5 
+y.Moist[((1:dim(tab)[1])*2)-1] <- tab$Moisture_q2.5 
+y.Moist[((1:dim(tab)[1])*2)] <- tab$Moisture_q97.5 
 
 y.Nitrogen <- numeric(length=nrow(tab)*2)
 y.Nitrogen[((1:dim(tab)[1])*2)-1] <- tab$Nitrogen_q2.5 
@@ -1190,14 +1190,14 @@ y.Nitrogen[((1:dim(tab)[1])*2)] <- tab$Nitrogen_q97.5
 forest.ref.cov.val <- data.frame( grunn=c(rep(rep(tab$NiN,each=2),indEll.n)),
                                                     county=rep('all',(nrow(tab)*2*indEll.n)),
                                                     region=rep('all',(nrow(tab)*2*indEll.n)),
-                                                    Ind=c(rep(c('Moist1','Moist2'),nrow(tab)),
+                                                    Ind=c(rep(c('Moisture1','Moisture2'),nrow(tab)),
                                                           rep(c('Nitrogen1','Nitrogen2'),nrow(tab))
                                                           
                                                     ),
-                                                    Rv=c(rep(tab$Moist_q50,each=2),
+                                                    Rv=c(rep(tab$Moisture_q50,each=2),
                                                          rep(tab$Nitrogen_q50,each=2)
                                                     ),
-                                                    Gv=c(y.Moist,y.Nitrogen),
+                                                    Gv=c(y.Moisture,y.Nitrogen),
                                                     maxmin=c(rep(c(1,12),nrow(tab)), # 12 levels of moisture
                                                              rep(c(1,9),nrow(tab))  # 9 levels of nitrogen
                                                     )
@@ -1304,7 +1304,15 @@ ANO.forest$Nitrogen <- ANO.forest$Nitrogen2
 ANO.forest <- ANO.forest %>%
   st_as_sf(coords = c("X", "Y"), crs = st_crs(ANO.geo))
 
+#saveRDS(ANO.forest, paste0(here::here(),"/data/cache/ANO.forest.nitrogen.RDS"))
+
 ```
+
+```{r, include = F}
+# Data from cache
+ANO.forest<-readRDS(paste0(here::here(), "/data/cache/ANO.forest.nitrogen.RDS"))
+```
+
 
 ```{r}
 head(ANO.forest) %>%
@@ -1352,7 +1360,8 @@ NO_FUNI_004_table <- tibble(
   Region = c("Norway", "Central Norway", "Eastern Norway", "Northern Norway", "Southern Norway", "Western Norway"),
   indicator_value = c(plogis(summary(nitrogen.no)$coef$cond[,1]), plogis(summary(nitrogen.re)$coef$cond[,1])),
   CI_upper = c(plogis(summary(nitrogen.no)$coef$cond[,1]+1.96*summary(nitrogen.no)$coef$cond[,2]), plogis(summary(nitrogen.re)$coef$cond[,1]+1.96*summary(nitrogen.re)$coef$cond[,2])),
-  CI_lower = as.numeric(plogis(summary(nitrogen.no)$coef$cond[,1]-1.96*summary(nitrogen.no)$coef$cond[,2]), plogis(summary(nitrogen.re)$coef$cond[,1]-1.96*summary(nitrogen.re)$coef$cond[,2]))
+  CI_lower = as.numeric(plogis(summary(nitrogen.no)$coef$cond[,1]-1.96*summary(nitrogen.no)$coef$cond[,2]), plogis(summary(nitrogen.re)$coef$cond[,1]-1.96*summary(nitrogen.re)$coef$cond[,2])),
+  N = c(summary(nitrogen.no)$nobs, table(nitrogen.re$frame$region))
 )
 NO_FUNI_004_table
 ```
@@ -1421,6 +1430,140 @@ mu |>
   ) |>
     unite(col = "95% CI", c(low, high), sep = " - ") |>
     gt::gt()
+```
+
+Here is a map illustration of the national results:
+```{r fig-map}
+
+## get results into the regnor spatial object
+regnor <- regnor %>% 
+  mutate(region = case_when(
+    region == "Central.Norway" ~ "Central Norway",
+    region == "Eastern.Norway" ~ "Eastern Norway",
+    region == "Northern.Norway" ~ "Northern Norway",
+    region == "Western.Norway" ~ "Western Norway",
+    region == "Southern.Norway" ~ "Southern Norway"))
+
+regnor.res <- merge(
+  regnor, 
+  NO_FUNI_004_table[, c("Region", "N", "indicator_value")], 
+  by.x = "region", 
+  by.y = "Region",
+  all.x = TRUE
+)
+
+## Prepare the text labels (rounding the indicator value to 2 decimal places)
+# We use \n to push the N count to a new line so it looks clean inside the polygon
+regnor.res$map_label <- paste0(
+  round(regnor.res$indicator_value, 2), "\n",
+  "N = ", regnor.res$N
+)
+
+#regnor.res$map_label <- paste0(
+#  "Val: ", round(regnor.res$indicator_value, 2), "\n",
+#  "N = ", regnor.res$N
+#)
+
+# Extract and calculate the national back-transformed intercept value
+nat_val <- round(plogis(summary(nitrogen.no)$coef$cond[1, 1]), 2)
+
+# Extract the total number of observations
+nat_n <- summary(nitrogen.no)$nobs
+
+# Create the text string for your bottom-right inlay
+inlay_text <- paste0("National\nVal: ", nat_val, "\nN = ", nat_n)
+
+
+
+
+## preparing label coordinates
+# Extract true inside coordinates (UTM 33N meters)
+label_coords <- regnor.res %>%
+  st_point_on_surface() %>%
+  st_coordinates() %>%
+  as.data.frame()
+
+# Attach coordinates to the attribute data frame
+label_data <- regnor.res %>%
+  st_drop_geometry() %>%
+  bind_cols(label_coords)
+
+# Revert Western Norway to its previous stable placement (-180km)
+label_data <- label_data %>%
+  mutate(
+    X = case_when(
+      region == "Western Norway" ~ X - 180000,  # Reverted to previous placement
+      region == "Central Norway" ~ X - 220000,  # Maintained leftward shift
+      region == "Northern Norway" ~ X - 180000, 
+      TRUE ~ X
+    ),
+    hjust_val = ifelse(region %in% c("Western Norway", "Central Norway", "Northern Norway"), 
+                       1, 0.5)
+  )
+
+# Extract base coordinates for national inlay
+central_x_base  <- label_coords$X[regnor.res$region == "Central Norway"]
+northern_y_base <- label_coords$Y[regnor.res$region == "Northern Norway"]
+
+# National Inlay Position (maintained further down and right)
+inlay_x <- central_x_base + 340000  
+inlay_y <- northern_y_base - 450000 
+
+
+
+
+## plotting
+# Get the bounding box limits of your original dataset
+bbox <- st_bbox(regnor.res)
+
+# Extend the left boundary (xmin) out by an extra 250,000 meters 
+# to give the shifted western text plenty of breathing room.
+extended_xmin <- bbox[["xmin"]] - 250000
+extended_xmax <- bbox[["xmax"]] + 100000 # minor padding on the right side for the inlay
+
+ggplot() +
+  # Plot the base light beige map with black borders
+  geom_sf(data = regnor.res, fill = "#F5F5DC", color = "black", size = 0.5) +
+  
+  # Add the custom fine-tuned region labels
+  geom_text(
+    data = label_data,
+    aes(x = X, y = Y, label = map_label, hjust = hjust_val),
+    size = 5.5,
+    color = "black",
+    fontface = "bold",
+    lineheight = 0.9
+  ) +
+  
+#  # Add the repositioned National inlay
+#  annotate(
+#    "text",
+#    x = inlay_x, y = inlay_y,
+#    label = inlay_text,
+#    size = 4,
+#    fontface = "italic",
+#    color = "black",
+#    hjust = 0, 
+#    lineheight = 0.9
+#  ) +
+  
+  # Enforce the expanded canvas limits explicitly
+  coord_sf(
+    xlim = c(extended_xmin, extended_xmax),
+    ylim = c(bbox[["ymin"]], bbox[["ymax"]]),
+    clip = "off"
+  ) +
+  
+  # Clean, minimalist formatting
+  theme_void() +
+  theme(
+    legend.position = "none"
+  )
+
+#| fig-cap: 'Indicator values and number of observations per region for NO_FUNI_004, calculated for Norwegian forest ecosystems.'
+
+
+
 ```
 
 
